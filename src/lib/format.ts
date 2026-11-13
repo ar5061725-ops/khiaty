@@ -1,0 +1,17 @@
+export const kwd = (n: number) => `${Number(n).toFixed(3)} KWD`;
+
+/** Parses a user-typed number; returns NaN for empty / invalid input. */
+export function parseNum(x: string): number {
+  const t = String(x).trim();
+  const n = Number(t);
+  return t !== "" && Number.isFinite(n) ? n : NaN;
+}
+
+export function nowKuwait(): string {
+  const d = new Date();
+  const date = d.toLocaleDateString("en-CA", { timeZone: "Asia/Kuwait" });
+  const time = d.toLocaleTimeString("en-GB", { timeZone: "Asia/Kuwait", hour12: false });
+  return `${date} ${time}`;
+}
+
+export const shortId = (prefix: string) => `${prefix}-${Math.random().toString(16).slice(2, 6)}`;
