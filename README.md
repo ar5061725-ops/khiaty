@@ -25,7 +25,9 @@ NEXT_PUBLIC_SUPABASE_ANON_KEY=...   # المفتاح العام (publishable) ف
 - الجداول بالبادئة `khiaty_` (المشروع يحوي تطبيقاً آخر): `profiles, requests, bids, bid_versions, orders, messages`.
 - **RLS** على كل الجداول: الخيّاط يرى عروضه فقط، الزبون يرى عروض طلباته فقط، الطلب والدردشة لطرفيهما فقط، والدردشة تُفتح بعد دفع المقدّم.
 - كل تغيير حالة يمر عبر دوال RPC (`khiaty_submit_bid`, `khiaty_accept_bid`, `khiaty_set_order_stage`, …) تفرض القواعد في الخادم؛ والإحصاءات (المنافسة، التقييم) تُعاد مجمّعة دون أسماء أو أسعار المنافسين.
-- `khiaty_confirm_payment` **محاكاة** للـ webhook، ويجب استبدالها بنقطة خادم تتحقق من توقيع البوابة قبل الإنتاج.
+- **الدفع (ماي فاتورة):** دالة حافة واحدة `myfatoorah` (`supabase/functions/myfatoorah`) بثلاثة مسارات: `create` (تنشئ فاتورة بمبلغ من قاعدة البيانات)، `verify` (عند عودة الزبون من صفحة الدفع)، وwebhook. لا تُسجَّل أي دفعة إلا بعد أن يؤكدها ماي فاتورة نفسه بمفتاحنا السرّي (`GetPaymentStatus`) وتطابق المبلغ. الدالة `khiaty_apply_payment` لا يستدعيها إلا `service_role`.
+- **المفتاح السرّي** محفوظ في Supabase Vault (`myfatoorah_api_key`, `myfatoorah_base_url`) أو كسرّ دالة `MYFATOORAH_API_KEY` / `MYFATOORAH_BASE_URL`؛ **لا يوجد في الكود**. الحالي مفتاح تجريبي (`apitest.myfatoorah.com`).
+- **للانتقال إلى الإنتاج:** مفتاح ماي فاتورة الحيّ + `myfatoorah_base_url = https://api.myfatoorah.com` + `NEXT_PUBLIC_PAYMENTS_SANDBOX=false` في Vercel. وسجّل رابط الـ webhook في بوابة ماي فاتورة: `https://<project-ref>.supabase.co/functions/v1/myfatoorah` (الحدث: Payment Status Changed).
 - تأكيد الإيميل مفعّل في المشروع: المستخدم الجديد يؤكد بريده ثم يسجّل الدخول.
 
 ## البنية
@@ -53,4 +55,4 @@ src/
 - **حالات النظام:** هيكل تحميل أثناء تحميل الحالة المحفوظة، `loading.tsx`/`error.tsx`/`not-found.tsx`، رسائل أخطاء النماذج (`role="alert"`)، حالات فارغة، وحالة انتظار في بوابة الدفع.
 - **الخصوصية:** الخيّاط يرى إحصاءات المنافسة فقط، ولا يرى أسماء أو أسعار المنافسين؛ سجل العرض يظهر لصاحبه وصاحب الطلب فقط.
 - **قابلية التوسع:** كل الوصول للبيانات عبر `useStore()`، والمكوّنات لا تعرف شيئاً عن Supabase.
-- الدفع محاكاة (Sandbox)؛ اربط بوابة حقيقية (ماي فاتورة) مع webhook موقّع قبل الإنتاج.
+- الدفع عبر صفحة ماي فاتورة المستضافة؛ بيانات البطاقة لا تمرّ بالتطبيق ولا بقاعدة البيانات.

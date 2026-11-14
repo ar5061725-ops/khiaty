@@ -25,7 +25,6 @@ export const STAGE_LABEL: Record<OrderStage, string> = {
 /** Stages shown in the order progress tracker (awaiting_upfront precedes them). */
 export const STAGE_TRACK: OrderStage[] = ["accepted", "in_progress", "ready", "completed"];
 
-export const PAY_METHODS = ["KNET", "Apple Pay", "Google Pay", "بطاقة"] as const;
 
 export const LANDING_STEPS = [
   "انشر طلبك بالوصف والصورة والميزانية",

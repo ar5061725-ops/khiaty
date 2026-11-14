@@ -40,7 +40,10 @@ export interface KhiatyStore {
   declineBid: (bidId: string) => Promise<void>;
   acceptBid: (bidId: string) => Promise<Result<string>>;
   setOrderStage: (orderId: string, stage: "in_progress" | "ready" | "completed", toast: string) => Promise<void>;
-  confirmPayment: (orderId: string, phase: PayPhase) => Promise<Result>;
+  /** creates a MyFatoorah invoice for the due payment and returns the hosted payment-page URL */
+  startPayment: (orderId: string, phase: PayPhase) => Promise<Result<string>>;
+  /** asks the server to confirm a payment with MyFatoorah after the customer returns from the payment page */
+  verifyPayment: (paymentId: string) => Promise<Result<"paid" | "pending" | "failed" | "ignored">>;
   sendMessage: (orderId: string, text: string) => Promise<void>;
   submitReview: (orderId: string, stars: number, text: string) => Promise<void>;
   getCompetition: (reqId: string) => Promise<Result<Competition>>;
@@ -280,12 +283,34 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     await act(() => getSupabase().rpc("khiaty_set_order_stage", { p_order: orderId, p_stage: stage }), msg);
   }, [act]);
 
-  /** Sandbox stand-in for the payment-gateway webhook (see khiaty_confirm_payment in the DB). */
-  const confirmPayment = useCallback<KhiatyStore["confirmPayment"]>((orderId, phase) =>
-    act(() => getSupabase().rpc("khiaty_confirm_payment", { p_order: orderId, p_phase: phase }),
-      phase === "up"
-        ? "وصل إشعار البوابة: تم دفع المقدّم، والطلب مقبول، وفُتحت الدردشة."
-        : "وصل إشعار البوابة: تم دفع الدفعة النهائية."), [act]);
+  /** Calls the `myfatoorah` edge function (JWT attached automatically); errors come back as Arabic messages. */
+  const callPayments = useCallback(async <T,>(body: Record<string, unknown>): Promise<Result<T>> => {
+    const { data, error } = await getSupabase().functions.invoke("myfatoorah", { body });
+    if (error) {
+      let msg = "تعذّر الاتصال ببوابة الدفع. حاول مرة أخرى.";
+      try {
+        const detail = await (error as { context?: Response }).context?.json();
+        if (detail?.error) msg = detail.error;
+      } catch { /* keep the generic message */ }
+      return fail(msg);
+    }
+    return ok(data as T);
+  }, []);
+
+  const startPayment = useCallback<KhiatyStore["startPayment"]>(async (orderId, phase) => {
+    const res = await callPayments<{ url: string }>({ action: "create", orderId, phase });
+    return res.ok ? ok(res.data.url) : res;
+  }, [callPayments]);
+
+  const verifyPayment = useCallback<KhiatyStore["verifyPayment"]>(async (paymentId) => {
+    const res = await callPayments<{ status: "paid" | "pending" | "failed" | "ignored" }>({ action: "verify", paymentId });
+    if (!res.ok) return res;
+    if (res.data.status === "paid") {
+      await refresh().catch(() => {});
+      showToast("تم تأكيد الدفع من بوابة الدفع.");
+    }
+    return ok(res.data.status);
+  }, [callPayments, refresh, showToast]);
 
   const sendMessage = useCallback<KhiatyStore["sendMessage"]>(async (orderId, text) => {
     const body = text.trim();
@@ -311,9 +336,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<KhiatyStore>(() => ({
     ready, loadError, reload, db, user, toast, showToast, signIn, signUp, signOut, publishRequest, submitBid,
-    declineBid, acceptBid, setOrderStage, confirmPayment, sendMessage, submitReview, getCompetition,
+    declineBid, acceptBid, setOrderStage, startPayment, verifyPayment, sendMessage, submitReview, getCompetition,
   }), [ready, loadError, reload, db, user, toast, showToast, signIn, signUp, signOut, publishRequest, submitBid,
-    declineBid, acceptBid, setOrderStage, confirmPayment, sendMessage, submitReview, getCompetition]);
+    declineBid, acceptBid, setOrderStage, startPayment, verifyPayment, sendMessage, submitReview, getCompetition]);
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }
