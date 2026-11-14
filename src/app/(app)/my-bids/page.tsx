@@ -11,7 +11,7 @@ import { EmptyState } from "@/components/ui/feedback";
 
 export default function MyBidsPage() {
   const { db, user } = useStore();
-  const mine = db.bids.filter((b) => b.tailor === user?.email);
+  const mine = db.bids.filter((b) => b.tailor === user?.id);
   return (
     <RoleGate role="tailor">
       <div className="stack">

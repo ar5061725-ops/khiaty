@@ -21,19 +21,22 @@ export function BidForm({ requestId, requestOpen, myBid }: { requestId: string; 
   const [days, setDays] = useState(initial ? String(initial.days) : "");
   const [note, setNote] = useState(initial?.note ?? "");
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
 
   const canBid = requestOpen && (!myBid || myBid.status === "pending" || myBid.status === "declined");
   const upN = parseNum(up);
   const finN = parseNum(fin);
   const total = upN >= 0 && finN >= 0 ? kwd(upN + finN) : "—";
 
-  function onSubmit(e: FormEvent) {
+  async function onSubmit(e: FormEvent) {
     e.preventDefault();
     const d = parseNum(days);
     if (!(upN >= 0) || !(finN >= 0) || upN + finN <= 0) return setError("أدخل مبالغ صحيحة (المجموع أكبر من صفر).");
     if (!(Number.isInteger(d) && d >= 1 && d <= 365)) return setError("المدة رقم صحيح بين 1 و365 يوماً.");
     if (note.length > 500) return setError("الملاحظة طويلة جداً.");
-    const res = submitBid(requestId, { up: upN, fin: finN, days: d, note });
+    setBusy(true);
+    const res = await submitBid(requestId, { up: upN, fin: finN, days: d, note });
+    setBusy(false);
     setError(res.ok ? "" : res.error);
   }
 
@@ -55,7 +58,7 @@ export function BidForm({ requestId, requestOpen, myBid }: { requestId: string; 
           <TextAreaField label="ملاحظة للزبون (اختياري)" rows={2} value={note} placeholder="فكرة القماش، ما ستقوم به…"
             onChange={(e) => setNote(e.target.value)} />
           <FormError message={error} />
-          <Button type="submit">{myBid ? "إرسال نسخة معدّلة" : "إرسال العرض"}</Button>
+          <Button type="submit" loading={busy}>{myBid ? "إرسال نسخة معدّلة" : "إرسال العرض"}</Button>
           {myBid && <p className="tiny" style={{ color: "var(--warn)" }}>تنبيه: الزبون يرى كل نسخ عرضك، لا آخر الأرقام فقط.</p>}
         </form>
       ) : (

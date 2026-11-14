@@ -18,7 +18,7 @@ export function ChatWindow({ orderId }: { orderId: string }) {
 
   useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [msgs.length]);
 
-  if (!user || !order || !canSeeOrder(order, user.email)) {
+  if (!user || !order || !canSeeOrder(order, user.id)) {
     return <ErrorState title="المحادثة غير متاحة" action={<ButtonLink href={routes.orders} variant="outline">الطلبات</ButtonLink>} />;
   }
   if (!order.upPaid) {
@@ -28,7 +28,7 @@ export function ChatWindow({ orderId }: { orderId: string }) {
     );
   }
 
-  const other = user.email === order.customer ? order.tailor : order.customer;
+  const other = user.id === order.customer ? order.tailor : order.customer;
 
   function onSend(e: FormEvent) {
     e.preventDefault();
@@ -43,7 +43,7 @@ export function ChatWindow({ orderId }: { orderId: string }) {
       <p style={{ fontWeight: 700 }}>{userName(db, other)}</p>
       <div className="stack" style={{ gap: 8, flex: 1 }} role="log" aria-live="polite" aria-label="الرسائل">
         {msgs.map((m, i) => {
-          const mine = m.from === user.email;
+          const mine = m.from === user.id;
           return (
             <div key={i} className={`chat-row ${mine ? "mine" : "theirs"}`}>
               <p className={`bubble ${mine ? "mine" : "theirs"}`}>{m.text}</p>

@@ -4,18 +4,16 @@ import {
   createContext, useCallback, useContext, useEffect, useMemo, useRef, useState,
   type ReactNode,
 } from "react";
-import { seedDatabase } from "./seed";
-import { nowKuwait, shortId } from "./format";
-import { lastVersion } from "./domain";
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { getSupabase } from "./supabase";
+import { formatKuwait } from "./format";
 import type {
-  Bid, BidVersion, Database, Order, PayPhase, Result, Role, TailorRequest, User,
+  Bid, BidStatus, ChatMessage, Competition, Database, Order, OrderStage, PayPhase, Result, Role,
+  TailorRequest, User,
 } from "./types";
 
-const STORAGE_KEY = "khiaty:v1";
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-interface Session { email: string | null }
-interface Persisted { db: Database; session: Session }
+const EMPTY_DB: Database = { users: [], requests: [], bids: [], orders: [], msgs: {}, stats: {} };
 
 export interface NewRequestInput {
   title: string; cat: string; desc: string; img: boolean;
@@ -24,24 +22,28 @@ export interface NewRequestInput {
 export interface BidInput { up: number; fin: number; days: number; note: string }
 
 export interface KhiatyStore {
-  /** false until localStorage has been read — render skeletons until then */
+  /** false until the session and first data load are done — render skeletons until then */
   ready: boolean;
+  /** set when the initial data load failed; `reload` retries */
+  loadError: string;
+  reload: () => Promise<void>;
   db: Database;
   user: User | null;
   toast: string;
   showToast: (msg: string) => void;
-  signIn: (email: string, pass: string) => Result<User>;
-  signUp: (input: { name: string; email: string; pass: string; role: Role }) => Result<User>;
-  signOut: () => void;
-  publishRequest: (input: NewRequestInput) => Result<string>;
-  submitBid: (reqId: string, input: BidInput) => Result;
-  declineBid: (bidId: string) => void;
-  acceptBid: (bidId: string) => Result<string>;
-  setOrderStage: (orderId: string, stage: "in_progress" | "ready" | "completed", toast: string) => void;
-  confirmPayment: (orderId: string, phase: PayPhase) => void;
-  sendMessage: (orderId: string, text: string) => void;
-  submitReview: (orderId: string, stars: number, text: string) => void;
-  resetDemo: () => void;
+  signIn: (email: string, pass: string) => Promise<Result<User>>;
+  /** data === null means the account was created but needs e-mail confirmation first */
+  signUp: (input: { name: string; email: string; pass: string; role: Role }) => Promise<Result<User | null>>;
+  signOut: () => Promise<void>;
+  publishRequest: (input: NewRequestInput) => Promise<Result<string>>;
+  submitBid: (reqId: string, input: BidInput) => Promise<Result>;
+  declineBid: (bidId: string) => Promise<void>;
+  acceptBid: (bidId: string) => Promise<Result<string>>;
+  setOrderStage: (orderId: string, stage: "in_progress" | "ready" | "completed", toast: string) => Promise<void>;
+  confirmPayment: (orderId: string, phase: PayPhase) => Promise<Result>;
+  sendMessage: (orderId: string, text: string) => Promise<void>;
+  submitReview: (orderId: string, stars: number, text: string) => Promise<void>;
+  getCompetition: (reqId: string) => Promise<Result<Competition>>;
 }
 
 const StoreContext = createContext<KhiatyStore | null>(null);
@@ -55,46 +57,77 @@ export function useStore(): KhiatyStore {
 const fail = (error: string): { ok: false; error: string } => ({ ok: false, error });
 const ok = <T,>(data: T): { ok: true; data: T } => ({ ok: true, data });
 
-function load(): Persisted | null {
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as Persisted) : null;
-  } catch {
-    return null; // blocked storage / corrupt JSON → fall back to seed data
+/** Server-side rule violations arrive as Arabic messages; anything else gets a generic text. */
+const friendly = (message: string | undefined) =>
+  message && /[؀-ۿ]/.test(message) ? message : "تعذّر تنفيذ العملية. حاول مرة أخرى.";
+
+/* ---------- row → app model mappers ---------- */
+type Row = Record<string, any>; // eslint-disable-line @typescript-eslint/no-explicit-any
+
+function mapRequest(r: Row): TailorRequest {
+  return {
+    id: r.id, title: r.title, cat: r.cat, desc: r.descr, img: r.img,
+    min: r.min_budget == null ? null : Number(r.min_budget),
+    max: r.max_budget == null ? null : Number(r.max_budget),
+    needBy: r.need_by, status: r.status, customer: r.customer_id,
+  };
+}
+
+function mapOrder(o: Row): Order {
+  return {
+    id: o.id, req: o.request_id, title: o.title, bid: o.bid_id, customer: o.customer_id, tailor: o.tailor_id,
+    up: Number(o.up), fin: Number(o.fin), stage: o.stage as OrderStage, upPaid: o.up_paid, finPaid: o.fin_paid,
+    review: o.review_stars ? { stars: o.review_stars, text: o.review_text ?? "" } : null,
+  };
+}
+
+async function fetchDatabase(sb: SupabaseClient): Promise<Database> {
+  const [profiles, requests, bids, versions, orders, messages, stats] = await Promise.all([
+    sb.from("khiaty_profiles").select("id,name,role"),
+    sb.from("khiaty_requests").select("*").order("created_at"),
+    sb.from("khiaty_bids").select("id,request_id,tailor_id,status").order("created_at"),
+    sb.from("khiaty_bid_versions").select("bid_id,up,fin,days,note,created_at").order("created_at"),
+    sb.from("khiaty_orders").select("*").order("created_at"),
+    sb.from("khiaty_messages").select("order_id,sender_id,body,created_at").order("created_at"),
+    sb.rpc("khiaty_tailor_stats"),
+  ]);
+  const failed = [profiles, requests, bids, versions, orders, messages, stats].find((r) => r.error);
+  if (failed?.error) throw new Error(failed.error.message);
+
+  const versionsByBid = new Map<string, Bid["v"]>();
+  for (const v of versions.data ?? []) {
+    const list = versionsByBid.get(v.bid_id) ?? [];
+    list.push({ up: Number(v.up), fin: Number(v.fin), days: v.days, note: v.note, at: formatKuwait(v.created_at) });
+    versionsByBid.set(v.bid_id, list);
   }
+  const msgs: Record<string, ChatMessage[]> = {};
+  for (const m of messages.data ?? []) (msgs[m.order_id] ??= []).push({ from: m.sender_id, text: m.body });
+
+  return {
+    users: (profiles.data ?? []) as User[],
+    requests: (requests.data ?? []).map(mapRequest),
+    bids: (bids.data ?? []).map((b): Bid => ({
+      id: b.id, req: b.request_id, tailor: b.tailor_id, status: b.status as BidStatus, v: versionsByBid.get(b.id) ?? [],
+    })),
+    orders: (orders.data ?? []).map(mapOrder),
+    msgs,
+    stats: Object.fromEntries((stats.data ?? []).map((s: Row) => [
+      s.tailor_id, { rating: s.rating == null ? "جديد" : Number(s.rating).toFixed(1), done: s.done },
+    ])),
+  };
 }
 
 export function StoreProvider({ children }: { children: ReactNode }) {
-  const [db, setDb] = useState<Database>(seedDatabase);
-  const [session, setSession] = useState<Session>({ email: null });
+  const [db, setDb] = useState<Database>(EMPTY_DB);
+  const [userId, setUserId] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
+  const [loadError, setLoadError] = useState("");
   const [toast, setToast] = useState("");
-  const timers = useRef<number[]>([]);
   const toastTimer = useRef<number | undefined>(undefined);
-  const dbRef = useRef(db);
-  dbRef.current = db;
+  const userIdRef = useRef<string | null>(null);
+  userIdRef.current = userId;
 
-  // hydrate once on the client
-  useEffect(() => {
-    const saved = load();
-    if (saved?.db) { setDb(saved.db); setSession(saved.session ?? { email: null }); }
-    setReady(true);
-    const pending = timers.current;
-    return () => pending.forEach((t) => window.clearTimeout(t));
-  }, []);
-
-  // persist after hydration
-  useEffect(() => {
-    if (!ready) return;
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify({ db, session } satisfies Persisted));
-    } catch { /* storage full or unavailable — the app keeps working in memory */ }
-  }, [db, session, ready]);
-
-  const user = useMemo(
-    () => (session.email ? db.users.find((u) => u.email === session.email) ?? null : null),
-    [db.users, session.email],
-  );
+  const user = useMemo(() => (userId ? db.users.find((u) => u.id === userId) ?? null : null), [db.users, userId]);
 
   const showToast = useCallback((msg: string) => {
     setToast(msg);
@@ -102,140 +135,185 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (msg) toastTimer.current = window.setTimeout(() => setToast(""), 5000);
   }, []);
 
-  const later = useCallback((fn: () => void, ms: number) => {
-    timers.current.push(window.setTimeout(fn, ms));
+  /** Re-reads everything RLS lets this user see. */
+  const refresh = useCallback(async () => {
+    setDb(await fetchDatabase(getSupabase()));
   }, []);
 
-  const signIn = useCallback<KhiatyStore["signIn"]>((rawEmail, pass) => {
+  const reload = useCallback(async () => {
+    setLoadError("");
+    try { await refresh(); } catch (e) { setLoadError(e instanceof Error ? e.message : "تعذّر تحميل البيانات."); }
+  }, [refresh]);
+
+  // restore the session on first load
+  useEffect(() => {
+    const sb = getSupabase();
+    let cancelled = false;
+    (async () => {
+      try {
+        const { data } = await sb.auth.getSession();
+        if (data.session) {
+          setUserId(data.session.user.id);
+          await refresh();
+        }
+      } catch (e) {
+        if (!cancelled) setLoadError(e instanceof Error ? e.message : "تعذّر تحميل البيانات.");
+      } finally {
+        if (!cancelled) setReady(true);
+      }
+    })();
+    // session expiry / sign-out from another tab
+    const { data: sub } = sb.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_OUT") { setUserId(null); setDb(EMPTY_DB); }
+    });
+    return () => { cancelled = true; sub.subscription.unsubscribe(); };
+  }, [refresh]);
+
+  // live updates: any change visible to this user triggers a (debounced) refetch
+  useEffect(() => {
+    if (!userId) return;
+    const sb = getSupabase();
+    let timer: number | undefined;
+    const bump = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => { refresh().catch(() => {}); }, 250);
+    };
+    let channel = sb.channel(`khiaty-${userId}`);
+    for (const table of ["khiaty_requests", "khiaty_bids", "khiaty_bid_versions", "khiaty_orders", "khiaty_messages"]) {
+      channel = channel.on("postgres_changes", { event: "*", schema: "public", table }, bump);
+    }
+    channel.subscribe();
+    return () => { window.clearTimeout(timer); sb.removeChannel(channel); };
+  }, [userId, refresh]);
+
+  /** Runs a server call, reloads data on success and shows an error toast on failure. */
+  const act = useCallback(async (call: () => PromiseLike<{ error: { message: string } | null }>, okToast?: string): Promise<Result> => {
+    const { error } = await call();
+    if (error) { showToast(friendly(error.message)); return fail(friendly(error.message)); }
+    await refresh().catch(() => {});
+    if (okToast) showToast(okToast);
+    return ok(undefined);
+  }, [refresh, showToast]);
+
+  const signIn = useCallback<KhiatyStore["signIn"]>(async (rawEmail, pass) => {
     const email = rawEmail.trim().toLowerCase();
     if (!EMAIL_RE.test(email)) return fail("إيميل غير صالح.");
-    const u = dbRef.current.users.find((x) => x.email === email && x.pass === pass);
-    if (!u) return fail("الإيميل أو كلمة المرور غير صحيحة.");
-    setSession({ email: u.email });
-    return ok(u);
+    const sb = getSupabase();
+    const { data, error } = await sb.auth.signInWithPassword({ email, password: pass });
+    if (error || !data.user) return fail("الإيميل أو كلمة المرور غير صحيحة.");
+    try {
+      const next = await fetchDatabase(sb);
+      const me = next.users.find((u) => u.id === data.user!.id);
+      if (!me) { await sb.auth.signOut(); return fail("هذا الحساب غير مسجّل في خياطتي."); }
+      setDb(next); setUserId(me.id);
+      return ok(me);
+    } catch {
+      await sb.auth.signOut();
+      return fail("تعذّر تحميل بياناتك. حاول مرة أخرى.");
+    }
   }, []);
 
-  const signUp = useCallback<KhiatyStore["signUp"]>(({ name, email: rawEmail, pass, role }) => {
+  const signUp = useCallback<KhiatyStore["signUp"]>(async ({ name, email: rawEmail, pass, role }) => {
     const email = rawEmail.trim().toLowerCase();
     if (!EMAIL_RE.test(email)) return fail("إيميل غير صالح.");
     if (name.trim().length < 2) return fail("اكتب الاسم.");
     if (pass.length < 8) return fail("كلمة المرور 8 أحرف على الأقل.");
-    if (dbRef.current.users.some((u) => u.email === email)) return fail("هذا الإيميل مسجّل مسبقاً.");
-    const u: User = { email, name: name.trim(), role, pass, baseRating: [], baseDone: 0 };
-    setDb((d) => ({ ...d, users: [...d.users, u] }));
-    setSession({ email });
-    showToast("تم إنشاء الحساب وتسجيل دخولك.");
-    return ok(u);
-  }, [showToast]);
-
-  const signOut = useCallback(() => { setSession({ email: null }); setToast(""); }, []);
-
-  const publishRequest = useCallback<KhiatyStore["publishRequest"]>((input) => {
-    if (!user) return fail("سجّل الدخول أولاً.");
-    const id = shortId("r");
-    const r: TailorRequest = { id, ...input, status: "open", customer: user.email };
-    setDb((d) => ({ ...d, requests: [...d.requests, r] }));
-    showToast("تم نشر الطلب (مفتوح) وأصبح ظاهراً لكل الخيّاطين.");
-    return ok(id);
-  }, [user, showToast]);
-
-  const submitBid = useCallback<KhiatyStore["submitBid"]>((reqId, input) => {
-    if (!user || user.role !== "tailor") return fail("هذه الصفحة للخيّاطين فقط.");
-    const req = dbRef.current.requests.find((r) => r.id === reqId);
-    if (!req || req.status !== "open") return fail("هذا الطلب لم يعد يستقبل عروضاً.");
-    const ver: BidVersion = { ...input, note: input.note.trim(), at: nowKuwait() };
-    const mine = dbRef.current.bids.find((b) => b.req === reqId && b.tailor === user.email);
-    if (mine) {
-      if (mine.status === "accepted" || mine.status === "not_selected") return fail("لا يمكن تعديل هذا العرض.");
-      setDb((d) => ({ ...d, bids: d.bids.map((b) => b.id === mine.id ? { ...b, status: "pending", v: [...b.v, ver] } : b) }));
-      showToast(`تم حفظ نسخة جديدة #${mine.v.length + 1} وعاد العرض معلّقاً.`);
-    } else {
-      const bid: Bid = { id: shortId("b"), req: reqId, tailor: user.email, status: "pending", v: [ver] };
-      setDb((d) => ({ ...d, bids: [...d.bids, bid] }));
-      showToast("تم إرسال العرض (معلّق).");
-    }
-    return ok(undefined);
-  }, [user, showToast]);
-
-  const declineBid = useCallback((bidId: string) => {
-    setDb((d) => ({ ...d, bids: d.bids.map((b) => b.id === bidId ? { ...b, status: "declined" } : b) }));
-    showToast("تم رفض العرض. يمكن للخيّاط تعديله فيعود معلّقاً.");
-  }, [showToast]);
-
-  const acceptBid = useCallback<KhiatyStore["acceptBid"]>((bidId) => {
-    const cur = dbRef.current;
-    const bid = cur.bids.find((b) => b.id === bidId);
-    const req = bid && cur.requests.find((r) => r.id === bid.req);
-    if (!user || !bid || !req || req.customer !== user.email) return fail("تعذّر قبول العرض.");
-    if (req.status !== "open" || bid.status !== "pending") return fail("هذا العرض لم يعد متاحاً للقبول.");
-    const v = lastVersion(bid);
-    const order: Order = {
-      id: shortId("o"), req: req.id, title: req.title, bid: bid.id, customer: user.email, tailor: bid.tailor,
-      up: v.up, fin: v.fin, stage: "awaiting_upfront", upPaid: false, finPaid: false, review: null,
-    };
-    setDb((d) => ({
-      ...d,
-      orders: [...d.orders, order],
-      requests: d.requests.map((r) => r.id === req.id ? { ...r, status: "awarded" } : r),
-      bids: d.bids.map((b) => b.req !== req.id ? b : { ...b, status: b.id === bid.id ? "accepted" : "not_selected" }),
-    }));
-    showToast("");
-    return ok(order.id);
-  }, [user, showToast]);
-
-  const setOrderStage = useCallback<KhiatyStore["setOrderStage"]>((orderId, stage, msg) => {
-    setDb((d) => ({ ...d, orders: d.orders.map((o) => o.id === orderId ? { ...o, stage } : o) }));
-    showToast(msg);
-  }, [showToast]);
-
-  /** Called once the (simulated) gateway webhook confirms the payment. */
-  const confirmPayment = useCallback<KhiatyStore["confirmPayment"]>((orderId, phase) => {
-    setDb((d) => {
-      const order = d.orders.find((o) => o.id === orderId);
-      if (!order) return d;
-      const orders = d.orders.map((o) => o.id !== orderId ? o
-        : phase === "up" ? { ...o, upPaid: true, stage: "accepted" as const } : { ...o, finPaid: true });
-      const msgs = phase === "up" && !d.msgs[orderId]
-        ? { ...d.msgs, [orderId]: [{ from: order.tailor, text: "شكراً لاختيارك! متى يناسبك موعد القياس؟" }] }
-        : d.msgs;
-      return { ...d, orders, msgs };
+    const sb = getSupabase();
+    const { data, error } = await sb.auth.signUp({
+      email, password: pass, options: { data: { app: "khiaty", name: name.trim(), role } },
     });
-    showToast(phase === "up"
-      ? "وصل إشعار البوابة: تم دفع المقدّم، والطلب مقبول، وفُتحت الدردشة."
-      : "وصل إشعار البوابة: تم دفع الدفعة النهائية.");
+    if (error) return fail(/registered|exists/i.test(error.message) ? "هذا الإيميل مسجّل مسبقاً." : "تعذّر إنشاء الحساب. تحقق من البيانات وحاول مرة أخرى.");
+    if (data.user && data.user.identities?.length === 0) return fail("هذا الإيميل مسجّل مسبقاً.");
+    if (!data.session) return ok(null); // e-mail confirmation required
+    try {
+      const next = await fetchDatabase(sb);
+      const me = next.users.find((u) => u.id === data.user!.id);
+      if (!me) return fail("تعذّر إنشاء ملفك الشخصي. حاول مرة أخرى.");
+      setDb(next); setUserId(me.id);
+      showToast("تم إنشاء الحساب وتسجيل دخولك.");
+      return ok(me);
+    } catch {
+      return fail("تم إنشاء الحساب لكن تعذّر تحميل بياناتك. سجّل الدخول من جديد.");
+    }
   }, [showToast]);
 
-  const sendMessage = useCallback<KhiatyStore["sendMessage"]>((orderId, text) => {
-    const t = text.trim();
-    const order = dbRef.current.orders.find((o) => o.id === orderId);
-    if (!t || !user || !order) return;
-    const other = user.email === order.customer ? order.tailor : order.customer;
-    setDb((d) => ({ ...d, msgs: { ...d.msgs, [orderId]: [...(d.msgs[orderId] ?? []), { from: user.email, text: t }] } }));
-    later(() => {
-      setDb((d) => ({
-        ...d,
-        msgs: { ...d.msgs, [orderId]: [...(d.msgs[orderId] ?? []), { from: other, text: "وصلت رسالتك، سأرد بالتفاصيل قريباً." }] },
-      }));
-    }, 1500);
-  }, [user, later]);
+  const signOut = useCallback(async () => {
+    await getSupabase().auth.signOut();
+    setUserId(null); setDb(EMPTY_DB); setToast("");
+  }, []);
 
-  const submitReview = useCallback<KhiatyStore["submitReview"]>((orderId, stars, text) => {
-    setDb((d) => ({
-      ...d,
-      orders: d.orders.map((o) => o.id === orderId && !o.review ? { ...o, review: { stars, text: text.trim() || "بدون تعليق" } } : o),
-    }));
-    showToast("شكراً! أُضيف تقييمك إلى سجل الخيّاط.");
-  }, [showToast]);
+  const publishRequest = useCallback<KhiatyStore["publishRequest"]>(async (input) => {
+    if (!userIdRef.current) return fail("سجّل الدخول أولاً.");
+    const { data, error } = await getSupabase().from("khiaty_requests").insert({
+      customer_id: userIdRef.current, title: input.title, cat: input.cat, descr: input.desc, img: input.img,
+      min_budget: input.min, max_budget: input.max, need_by: input.needBy,
+    }).select("id").single();
+    if (error || !data) return fail(friendly(error?.message));
+    await refresh().catch(() => {});
+    showToast("تم نشر الطلب (مفتوح) وأصبح ظاهراً لكل الخيّاطين.");
+    return ok(data.id as string);
+  }, [refresh, showToast]);
 
-  const resetDemo = useCallback(() => {
-    setDb(seedDatabase()); setSession({ email: null }); setToast("");
+  const submitBid = useCallback<KhiatyStore["submitBid"]>(async (reqId, input) => {
+    const had = db.bids.find((b) => b.req === reqId && b.tailor === userIdRef.current);
+    const res = await getSupabase().rpc("khiaty_submit_bid", {
+      p_request: reqId, p_up: input.up, p_fin: input.fin, p_days: input.days, p_note: input.note,
+    });
+    if (res.error) return fail(friendly(res.error.message));
+    await refresh().catch(() => {});
+    showToast(had ? `تم حفظ نسخة جديدة #${had.v.length + 1} وعاد العرض معلّقاً.` : "تم إرسال العرض (معلّق).");
+    return ok(undefined);
+  }, [db.bids, refresh, showToast]);
+
+  const declineBid = useCallback<KhiatyStore["declineBid"]>(async (bidId) => {
+    await act(() => getSupabase().rpc("khiaty_decline_bid", { p_bid: bidId }), "تم رفض العرض. يمكن للخيّاط تعديله فيعود معلّقاً.");
+  }, [act]);
+
+  const acceptBid = useCallback<KhiatyStore["acceptBid"]>(async (bidId) => {
+    const { data, error } = await getSupabase().rpc("khiaty_accept_bid", { p_bid: bidId });
+    if (error || !data) return fail(friendly(error?.message));
+    await refresh().catch(() => {});
+    return ok(data as string);
+  }, [refresh]);
+
+  const setOrderStage = useCallback<KhiatyStore["setOrderStage"]>(async (orderId, stage, msg) => {
+    await act(() => getSupabase().rpc("khiaty_set_order_stage", { p_order: orderId, p_stage: stage }), msg);
+  }, [act]);
+
+  /** Sandbox stand-in for the payment-gateway webhook (see khiaty_confirm_payment in the DB). */
+  const confirmPayment = useCallback<KhiatyStore["confirmPayment"]>((orderId, phase) =>
+    act(() => getSupabase().rpc("khiaty_confirm_payment", { p_order: orderId, p_phase: phase }),
+      phase === "up"
+        ? "وصل إشعار البوابة: تم دفع المقدّم، والطلب مقبول، وفُتحت الدردشة."
+        : "وصل إشعار البوابة: تم دفع الدفعة النهائية."), [act]);
+
+  const sendMessage = useCallback<KhiatyStore["sendMessage"]>(async (orderId, text) => {
+    const body = text.trim();
+    if (!body || !userIdRef.current) return;
+    await act(() => getSupabase().from("khiaty_messages").insert({ order_id: orderId, sender_id: userIdRef.current, body }));
+  }, [act]);
+
+  const submitReview = useCallback<KhiatyStore["submitReview"]>(async (orderId, stars, text) => {
+    await act(() => getSupabase().rpc("khiaty_submit_review", { p_order: orderId, p_stars: stars, p_text: text }),
+      "شكراً! أُضيف تقييمك إلى سجل الخيّاط.");
+  }, [act]);
+
+  const getCompetition = useCallback<KhiatyStore["getCompetition"]>(async (reqId) => {
+    const { data, error } = await getSupabase().rpc("khiaty_competition", { p_request: reqId });
+    if (error) return fail(friendly(error.message));
+    const row = (data as Row[] | null)?.[0];
+    return ok({
+      count: row?.bid_count ?? 0,
+      lowest: row?.lowest == null ? null : Number(row.lowest),
+      fastest: row?.fastest ?? null,
+    });
   }, []);
 
   const value = useMemo<KhiatyStore>(() => ({
-    ready, db, user, toast, showToast, signIn, signUp, signOut, publishRequest, submitBid,
-    declineBid, acceptBid, setOrderStage, confirmPayment, sendMessage, submitReview, resetDemo,
-  }), [ready, db, user, toast, showToast, signIn, signUp, signOut, publishRequest, submitBid,
-    declineBid, acceptBid, setOrderStage, confirmPayment, sendMessage, submitReview, resetDemo]);
+    ready, loadError, reload, db, user, toast, showToast, signIn, signUp, signOut, publishRequest, submitBid,
+    declineBid, acceptBid, setOrderStage, confirmPayment, sendMessage, submitReview, getCompetition,
+  }), [ready, loadError, reload, db, user, toast, showToast, signIn, signUp, signOut, publishRequest, submitBid,
+    declineBid, acceptBid, setOrderStage, confirmPayment, sendMessage, submitReview, getCompetition]);
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }

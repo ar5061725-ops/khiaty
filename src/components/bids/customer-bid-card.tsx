@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { useStore } from "@/lib/store";
 import { BID_STATUS } from "@/lib/constants";
@@ -16,11 +17,19 @@ export function CustomerBidCard({ bid, canAct, requestId }: { bid: Bid; canAct: 
   const router = useRouter();
   const v = lastVersion(bid);
   const st = BID_STATUS[bid.status];
+  const [busy, setBusy] = useState(false);
 
-  function onAccept() {
-    const res = acceptBid(bid.id);
-    if (!res.ok) return showToast(res.error);
+  async function onAccept() {
+    setBusy(true);
+    const res = await acceptBid(bid.id);
+    if (!res.ok) { setBusy(false); return showToast(res.error); }
     router.push(routes.pay(res.data, "up"));
+  }
+
+  async function onDecline() {
+    setBusy(true);
+    await declineBid(bid.id);
+    setBusy(false);
   }
 
   return (
@@ -50,8 +59,8 @@ export function CustomerBidCard({ bid, canAct, requestId }: { bid: Bid; canAct: 
 
       {canAct && (
         <div className="row">
-          <Button onClick={onAccept} size="sm" style={{ flex: 2 }}>اقبل وادفع {kwd(v.up)}</Button>
-          <Button variant="outline" size="sm" style={{ flex: 1 }} onClick={() => declineBid(bid.id)}>ارفض</Button>
+          <Button onClick={onAccept} loading={busy} size="sm" style={{ flex: 2 }}>اقبل وادفع {kwd(v.up)}</Button>
+          <Button variant="outline" size="sm" style={{ flex: 1 }} disabled={busy} onClick={onDecline}>ارفض</Button>
         </div>
       )}
     </article>

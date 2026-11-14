@@ -37,14 +37,14 @@ function nextStep(order: Order, isCustomer: boolean, run: (stage: "in_progress" 
 export function OrderDetail({ orderId }: { orderId: string }) {
   const { db, user, setOrderStage } = useStore();
   const order = db.orders.find((o) => o.id === orderId);
-  if (!user || !order || !canSeeOrder(order, user.email)) {
+  if (!user || !order || !canSeeOrder(order, user.id)) {
     return (
       <ErrorState title="الطلب غير موجود" message="قد لا يكون هذا الطلب يخصّ حسابك."
         action={<ButtonLink href={routes.orders} variant="outline">الطلبات</ButtonLink>} />
     );
   }
 
-  const isCustomer = user.email === order.customer;
+  const isCustomer = user.id === order.customer;
   const { notice, action } = nextStep(order, isCustomer, (stage, msg) => setOrderStage(order.id, stage, msg));
   const idx = order.stage === "awaiting_upfront" ? -1 : STAGE_TRACK.indexOf(order.stage);
   const chatOpen = order.upPaid;

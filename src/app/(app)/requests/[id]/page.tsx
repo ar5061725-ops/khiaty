@@ -13,7 +13,7 @@ import { EmptyState, ErrorState } from "@/components/ui/feedback";
 export default function CustomerRequestPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const { db, user } = useStore();
-  const request = db.requests.find((r) => r.id === id && r.customer === user?.email);
+  const request = db.requests.find((r) => r.id === id && r.customer === user?.id);
 
   return (
     <RoleGate role="customer">

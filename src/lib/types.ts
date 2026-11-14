@@ -1,12 +1,9 @@
 export type Role = "customer" | "tailor";
 
 export interface User {
-  email: string;
+  id: string;
   name: string;
   role: Role;
-  pass: string;
-  baseRating?: number[];
-  baseDone?: number;
 }
 
 export type RequestStatus = "open" | "awarded";
@@ -76,12 +73,24 @@ export interface ChatMessage {
 
 export type PayPhase = "up" | "fin";
 
+export interface TailorStats {
+  rating: string; // "جديد" until the first review
+  done: number;
+}
+
 export interface Database {
   users: User[];
   requests: TailorRequest[];
   bids: Bid[];
   orders: Order[];
   msgs: Record<string, ChatMessage[]>;
+  stats: Record<string, TailorStats>;
+}
+
+export interface Competition {
+  count: number;
+  lowest: number | null;
+  fastest: number | null;
 }
 
 export type Result<T = void> =

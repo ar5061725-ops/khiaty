@@ -11,7 +11,7 @@ import { EmptyState } from "@/components/ui/feedback";
 export default function OrdersPage() {
   const { db, user } = useStore();
   if (!user) return null;
-  const orders = db.orders.filter((o) => canSeeOrder(o, user.email)).reverse();
+  const orders = db.orders.filter((o) => canSeeOrder(o, user.id)).reverse();
   return (
     <div className="stack">
       <PageTitle>الطلبات المؤكدة</PageTitle>

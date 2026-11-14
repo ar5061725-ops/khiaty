@@ -7,11 +7,11 @@ export function parseNum(x: string): number {
   return t !== "" && Number.isFinite(n) ? n : NaN;
 }
 
-export function nowKuwait(): string {
-  const d = new Date();
+
+/** Formats a timestamp from the database as Kuwait local time ("YYYY-MM-DD HH:mm:ss"). */
+export function formatKuwait(iso: string): string {
+  const d = new Date(iso);
   const date = d.toLocaleDateString("en-CA", { timeZone: "Asia/Kuwait" });
   const time = d.toLocaleTimeString("en-GB", { timeZone: "Asia/Kuwait", hour12: false });
   return `${date} ${time}`;
 }
-
-export const shortId = (prefix: string) => `${prefix}-${Math.random().toString(16).slice(2, 6)}`;

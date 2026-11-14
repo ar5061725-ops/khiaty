@@ -4,13 +4,12 @@ import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { useStore } from "@/lib/store";
 import { homeFor } from "@/lib/routes";
-import { DEMO_ACCOUNTS } from "@/lib/constants";
 import type { Role } from "@/lib/types";
 import { Logo } from "@/components/layout/logo";
 import { Button } from "@/components/ui/button";
 import { ChoiceGroup, InputField } from "@/components/ui/form";
-import { FormError } from "@/components/ui/feedback";
-import { Toast } from "@/components/ui/feedback";
+import { FormError, Toast } from "@/components/ui/feedback";
+import { Notice } from "@/components/ui/display";
 
 const ROLES = [
   { value: "customer" as Role, label: "زبون" },
@@ -26,15 +25,19 @@ export function AuthForm({ initialMode }: { initialMode: "login" | "signup" }) {
   const [pass, setPass] = useState("");
   const [role, setRole] = useState<Role>("customer");
   const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
   const [busy, setBusy] = useState(false);
   const signup = mode === "signup";
 
-  function onSubmit(e: FormEvent) {
+  async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setError("");
+    setInfo("");
     setBusy(true);
-    const res = signup ? signUp({ name, email, pass, role }) : signIn(email, pass);
-    if (!res.ok) { setError(res.error); setBusy(false); return; }
+    const res = signup ? await signUp({ name, email, pass, role }) : await signIn(email, pass);
+    setBusy(false);
+    if (!res.ok) return setError(res.error);
+    if (!res.data) return setInfo("تم إنشاء الحساب. أرسلنا رابط تأكيد إلى بريدك؛ أكّده ثم سجّل الدخول.");
     router.replace(homeFor(res.data.role));
   }
 
@@ -61,6 +64,7 @@ export function AuthForm({ initialMode }: { initialMode: "login" | "signup" }) {
         )}
 
         <FormError message={error} />
+        {info && <Notice tone="ok">{info}</Notice>}
         <Button type="submit" block loading={busy}>{signup ? "إنشاء الحساب" : "دخول"}</Button>
 
         <p className="muted" style={{ textAlign: "center", fontSize: "0.875rem" }}>
@@ -71,7 +75,6 @@ export function AuthForm({ initialMode }: { initialMode: "login" | "signup" }) {
           </button>
         </p>
 
-        <p className="card tiny muted ltr" style={{ borderStyle: "dashed", lineHeight: 1.8 }}>Demo: {DEMO_ACCOUNTS}</p>
       </form>
       <Toast />
     </main>

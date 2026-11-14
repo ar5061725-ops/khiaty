@@ -17,7 +17,7 @@ export default function BrowsePage() {
         <PageTitle>تصفّح الطلبات المفتوحة</PageTitle>
         {open.length === 0 && <EmptyState>لا توجد طلبات مفتوحة حالياً.</EmptyState>}
         {open.map((r) => {
-          const mine = db.bids.find((b) => b.req === r.id && b.tailor === user?.email);
+          const mine = db.bids.find((b) => b.req === r.id && b.tailor === user?.id);
           return (
             <RequestCard key={r.id} request={r} href={routes.tailorRequest(r.id)}
               meta={<>{r.cat} · قبل {r.needBy}<br /><span style={{ color: "var(--gold-ink)" }}>

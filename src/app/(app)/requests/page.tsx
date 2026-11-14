@@ -11,7 +11,7 @@ import { EmptyState } from "@/components/ui/feedback";
 
 export default function MyRequestsPage() {
   const { db, user } = useStore();
-  const mine = db.requests.filter((r) => r.customer === user?.email).reverse();
+  const mine = db.requests.filter((r) => r.customer === user?.id).reverse();
   return (
     <RoleGate role="customer">
       <div className="stack">

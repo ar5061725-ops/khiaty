@@ -14,7 +14,7 @@ export default function BidHistoryPage({ params }: { params: Promise<{ id: strin
   const router = useRouter();
   const bid = db.bids.find((b) => b.id === id);
   // history is visible only to the bidding tailor and the request owner
-  const allowed = bid && user && canSeeBid(db, bid, user.email) ? bid : null;
+  const allowed = bid && user && canSeeBid(db, bid, user.id) ? bid : null;
 
   if (!allowed) return <ErrorState title="سجل العرض غير متاح" message="العرض غير موجود أو لا تملك صلاحية عرضه." onRetry={() => router.back()} />;
 

@@ -22,8 +22,9 @@ export function NewRequestForm() {
   const [max, setMax] = useState("");
   const [date, setDate] = useState("");
   const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
 
-  function onSubmit(e: FormEvent) {
+  async function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (title.trim().length < 3) return setError("اكتب عنواناً للطلب (3 أحرف على الأقل).");
     if (desc.trim().length < 10) return setError("الوصف قصير جداً.");
@@ -32,7 +33,9 @@ export function NewRequestForm() {
     if ((mn !== null && !(mn >= 0)) || (mx !== null && !(mx >= 0))) return setError("الميزانية يجب أن تكون أرقاماً.");
     if (mn !== null && mx !== null && mn > mx) return setError("حد الميزانية الأعلى أقل من الأدنى.");
     if (!date) return setError("حدّد تاريخ التسليم المطلوب.");
-    const res = publishRequest({ title: title.trim(), cat, desc: desc.trim(), img, min: mn, max: mx, needBy: date });
+    setBusy(true);
+    const res = await publishRequest({ title: title.trim(), cat, desc: desc.trim(), img, min: mn, max: mx, needBy: date });
+    setBusy(false);
     if (!res.ok) return setError(res.error);
     router.push(routes.requests);
   }
@@ -67,7 +70,7 @@ export function NewRequestForm() {
       <p className="tiny muted">الميزانية إرشادية فقط؛ يمكن للخيّاط تقديم عرض أعلى منها.</p>
 
       <FormError message={error} />
-      <Button type="submit" block>نشر الطلب</Button>
+      <Button type="submit" block loading={busy}>نشر الطلب</Button>
     </form>
   );
 }

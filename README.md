@@ -13,7 +13,20 @@ npm run build && npm start
 npm run typecheck
 ```
 
-حسابات تجريبية (كلمة المرور `khiaty2026`): `dana@khiaty.demo` (زبونة) · `mariam@khiaty.demo` / `noura@khiaty.demo` (خيّاطات).
+## Supabase
+
+البيانات والحسابات في Supabase (Auth + Postgres + Realtime). أنشئ ملف `.env.local` (انظر `.env.example`):
+
+```
+NEXT_PUBLIC_SUPABASE_URL=...
+NEXT_PUBLIC_SUPABASE_ANON_KEY=...   # المفتاح العام (publishable) فقط
+```
+
+- الجداول بالبادئة `khiaty_` (المشروع يحوي تطبيقاً آخر): `profiles, requests, bids, bid_versions, orders, messages`.
+- **RLS** على كل الجداول: الخيّاط يرى عروضه فقط، الزبون يرى عروض طلباته فقط، الطلب والدردشة لطرفيهما فقط، والدردشة تُفتح بعد دفع المقدّم.
+- كل تغيير حالة يمر عبر دوال RPC (`khiaty_submit_bid`, `khiaty_accept_bid`, `khiaty_set_order_stage`, …) تفرض القواعد في الخادم؛ والإحصاءات (المنافسة، التقييم) تُعاد مجمّعة دون أسماء أو أسعار المنافسين.
+- `khiaty_confirm_payment` **محاكاة** للـ webhook، ويجب استبدالها بنقطة خادم تتحقق من توقيع البوابة قبل الإنتاج.
+- تأكيد الإيميل مفعّل في المشروع: المستخدم الجديد يؤكد بريده ثم يسجّل الدخول.
 
 ## البنية
 
@@ -29,14 +42,15 @@ src/
     layout/            AppShell, Logo, AuthGate / RoleGate / PublicGate
     requests/ bids/ orders/ chat/ auth/    مكوّنات الميزات
   lib/
-    types.ts constants.ts format.ts seed.ts routes.ts
-    domain.ts          دوال نقية (التقييم، المنافسة، صلاحيات الرؤية)
-    store.tsx          حالة التطبيق (Context) + حفظ في localStorage
+    types.ts constants.ts format.ts routes.ts
+    domain.ts          دوال نقية (أسماء، تقييم، صلاحيات الرؤية)
+    supabase.ts        عميل Supabase
+    store.tsx          حالة التطبيق (Context) فوق Supabase + تحديث لحظي (Realtime)
 ```
 
 ## ملاحظات التصميم
 
 - **حالات النظام:** هيكل تحميل أثناء تحميل الحالة المحفوظة، `loading.tsx`/`error.tsx`/`not-found.tsx`، رسائل أخطاء النماذج (`role="alert"`)، حالات فارغة، وحالة انتظار في بوابة الدفع.
 - **الخصوصية:** الخيّاط يرى إحصاءات المنافسة فقط، ولا يرى أسماء أو أسعار المنافسين؛ سجل العرض يظهر لصاحبه وصاحب الطلب فقط.
-- **قابلية التوسع:** كل الوصول للبيانات عبر `useStore()`؛ استبدال `store.tsx` بطبقة API/Supabase لا يمس المكوّنات. بوابة الدفع والدردشة محاكاة (يُستبدلان بماي فاتورة وWebSocket).
-- هذه نسخة عرض: البيانات في المتصفح فقط وكلمات المرور نصّية — **لا تُستخدم في الإنتاج** دون خلفية حقيقية.
+- **قابلية التوسع:** كل الوصول للبيانات عبر `useStore()`، والمكوّنات لا تعرف شيئاً عن Supabase.
+- الدفع محاكاة (Sandbox)؛ اربط بوابة حقيقية (ماي فاتورة) مع webhook موقّع قبل الإنتاج.

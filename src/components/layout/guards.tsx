@@ -10,9 +10,10 @@ import { ButtonLink } from "@/components/ui/button";
 
 /** Waits for the store to hydrate, then requires a signed-in user. */
 export function AuthGate({ children }: { children: ReactNode }) {
-  const { ready, user } = useStore();
+  const { ready, user, loadError, reload } = useStore();
   const router = useRouter();
-  useEffect(() => { if (ready && !user) router.replace("/login"); }, [ready, user, router]);
+  useEffect(() => { if (ready && !user && !loadError) router.replace("/login"); }, [ready, user, loadError, router]);
+  if (loadError) return <ErrorState title="تعذّر تحميل البيانات" message="تحقق من اتصالك بالإنترنت ثم أعد المحاولة." onRetry={reload} />;
   if (!ready || !user) return <LoadingState />;
   return <>{children}</>;
 }

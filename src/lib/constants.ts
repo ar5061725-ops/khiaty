@@ -34,4 +34,3 @@ export const LANDING_STEPS = [
   "تابع التنفيذ والدردشة، ثم ادفع النهائي وقيّم",
 ];
 
-export const DEMO_ACCOUNTS = "dana@khiaty.demo · mariam@khiaty.demo · noura@khiaty.demo — khiaty2026";

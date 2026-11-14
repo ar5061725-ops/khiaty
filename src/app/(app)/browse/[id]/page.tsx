@@ -2,7 +2,6 @@
 
 import { use } from "react";
 import { useStore } from "@/lib/store";
-import { competition } from "@/lib/domain";
 import { routes } from "@/lib/routes";
 import { RoleGate } from "@/components/layout/guards";
 import { BidForm } from "@/components/bids/bid-form";
@@ -15,8 +14,7 @@ export default function TailorRequestPage({ params }: { params: Promise<{ id: st
   const { id } = use(params);
   const { db, user } = useStore();
   const request = db.requests.find((r) => r.id === id);
-  const myBid = db.bids.find((b) => b.req === id && b.tailor === user?.email);
-  const comp = competition(db, id);
+  const myBid = db.bids.find((b) => b.req === id && b.tailor === user?.id);
 
   return (
     <RoleGate role="tailor">
@@ -25,7 +23,7 @@ export default function TailorRequestPage({ params }: { params: Promise<{ id: st
       ) : (
         <div className="stack">
           <RequestSummary request={request} />
-          <CompetitionPanel {...comp} />
+          <CompetitionPanel requestId={id} />
           <BidForm key={myBid?.id ?? "new"} requestId={id} requestOpen={request.status === "open"} myBid={myBid} />
         </div>
       )}
