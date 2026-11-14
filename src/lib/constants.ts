@@ -1,4 +1,4 @@
-import type { BidStatus, OrderStage } from "./types";
+import type { BidStatus, OrderStage, PaymentStatus } from "./types";
 
 export const CATEGORIES = [
   "عباية", "ثوب", "دراعة", "جلابية", "فستان زفاف", "فستان سهرة",
@@ -33,3 +33,10 @@ export const LANDING_STEPS = [
   "تابع التنفيذ والدردشة، ثم ادفع النهائي وقيّم",
 ];
 
+
+export const PAYMENT_STATUS: Record<PaymentStatus, { label: string; tone: Tone }> = {
+  pending: { label: "قيد الانتظار", tone: "warn" },
+  success: { label: "ناجحة", tone: "ok" },
+  cancelled: { label: "ملغاة", tone: "neutral" },
+  rejected: { label: "مرفوضة", tone: "danger" },
+};

@@ -8,12 +8,12 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { getSupabase } from "./supabase";
 import { formatKuwait } from "./format";
 import type {
-  Bid, BidStatus, ChatMessage, Competition, Database, Order, OrderStage, PayPhase, Result, Role,
+  Bid, BidStatus, ChatMessage, Competition, Database, Order, OrderStage, PayPhase, Payment, PaymentStatus, Result, Role,
   TailorRequest, User,
 } from "./types";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const EMPTY_DB: Database = { users: [], requests: [], bids: [], orders: [], msgs: {}, stats: {} };
+const EMPTY_DB: Database = { users: [], requests: [], bids: [], orders: [], msgs: {}, stats: {}, payments: [] };
 
 export interface NewRequestInput {
   title: string; cat: string; desc: string; img: boolean;
@@ -43,7 +43,7 @@ export interface KhiatyStore {
   /** creates a MyFatoorah invoice for the due payment and returns the hosted payment-page URL */
   startPayment: (orderId: string, phase: PayPhase) => Promise<Result<string>>;
   /** asks the server to confirm a payment with MyFatoorah after the customer returns from the payment page */
-  verifyPayment: (paymentId: string) => Promise<Result<"paid" | "pending" | "failed" | "ignored">>;
+  verifyPayment: (paymentId: string) => Promise<Result<{ status: PaymentStatus | "ignored"; orderId?: string }>>;
   sendMessage: (orderId: string, text: string) => Promise<void>;
   submitReview: (orderId: string, stars: number, text: string) => Promise<void>;
   getCompetition: (reqId: string) => Promise<Result<Competition>>;
@@ -85,7 +85,7 @@ function mapOrder(o: Row): Order {
 }
 
 async function fetchDatabase(sb: SupabaseClient): Promise<Database> {
-  const [profiles, requests, bids, versions, orders, messages, stats] = await Promise.all([
+  const [profiles, requests, bids, versions, orders, messages, stats, payments] = await Promise.all([
     sb.from("khiaty_profiles").select("id,name,role"),
     sb.from("khiaty_requests").select("*").order("created_at"),
     sb.from("khiaty_bids").select("id,request_id,tailor_id,status").order("created_at"),
@@ -93,8 +93,9 @@ async function fetchDatabase(sb: SupabaseClient): Promise<Database> {
     sb.from("khiaty_orders").select("*").order("created_at"),
     sb.from("khiaty_messages").select("order_id,sender_id,body,created_at").order("created_at"),
     sb.rpc("khiaty_tailor_stats"),
+    sb.from("khiaty_payments").select("id,order_id,phase,item,amount,invoice_id,status,created_at").order("created_at", { ascending: false }),
   ]);
-  const failed = [profiles, requests, bids, versions, orders, messages, stats].find((r) => r.error);
+  const failed = [profiles, requests, bids, versions, orders, messages, stats, payments].find((r) => r.error);
   if (failed?.error) throw new Error(failed.error.message);
 
   const versionsByBid = new Map<string, Bid["v"]>();
@@ -114,6 +115,10 @@ async function fetchDatabase(sb: SupabaseClient): Promise<Database> {
     })),
     orders: (orders.data ?? []).map(mapOrder),
     msgs,
+    payments: (payments.data ?? []).map((p): Payment => ({
+      id: p.id, order: p.order_id, phase: p.phase, item: p.item, amount: Number(p.amount),
+      invoiceId: p.invoice_id == null ? null : Number(p.invoice_id), status: p.status as PaymentStatus, createdAt: p.created_at,
+    })),
     stats: Object.fromEntries((stats.data ?? []).map((s: Row) => [
       s.tailor_id, { rating: s.rating == null ? "جديد" : Number(s.rating).toFixed(1), done: s.done },
     ])),
@@ -182,7 +187,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       timer = window.setTimeout(() => { refresh().catch(() => {}); }, 250);
     };
     let channel = sb.channel(`khiaty-${userId}`);
-    for (const table of ["khiaty_requests", "khiaty_bids", "khiaty_bid_versions", "khiaty_orders", "khiaty_messages"]) {
+    for (const table of ["khiaty_requests", "khiaty_bids", "khiaty_bid_versions", "khiaty_orders", "khiaty_messages", "khiaty_payments"]) {
       channel = channel.on("postgres_changes", { event: "*", schema: "public", table }, bump);
     }
     channel.subscribe();
@@ -303,13 +308,11 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   }, [callPayments]);
 
   const verifyPayment = useCallback<KhiatyStore["verifyPayment"]>(async (paymentId) => {
-    const res = await callPayments<{ status: "paid" | "pending" | "failed" | "ignored" }>({ action: "verify", paymentId });
+    const res = await callPayments<{ status: PaymentStatus | "ignored"; orderId?: string }>({ action: "verify", paymentId });
     if (!res.ok) return res;
-    if (res.data.status === "paid") {
-      await refresh().catch(() => {});
-      showToast("تم تأكيد الدفع من بوابة الدفع.");
-    }
-    return ok(res.data.status);
+    await refresh().catch(() => {}); // the payment row / order changed on the server
+    if (res.data.status === "success") showToast("تم تأكيد الدفع من بوابة الدفع.");
+    return ok(res.data);
   }, [callPayments, refresh, showToast]);
 
   const sendMessage = useCallback<KhiatyStore["sendMessage"]>(async (orderId, text) => {

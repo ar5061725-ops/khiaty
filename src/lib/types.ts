@@ -85,6 +85,7 @@ export interface Database {
   orders: Order[];
   msgs: Record<string, ChatMessage[]>;
   stats: Record<string, TailorStats>;
+  payments: Payment[];
 }
 
 export interface Competition {
@@ -96,3 +97,18 @@ export interface Competition {
 export type Result<T = void> =
   | { ok: true; data: T }
   | { ok: false; error: string };
+
+export type PaymentStatus = "pending" | "success" | "cancelled" | "rejected";
+
+/** One attempt to pay a phase of an order through the payment gateway. */
+export interface Payment {
+  id: string;
+  order: string;
+  phase: PayPhase;
+  /** what is being paid for, e.g. "الدفعة المقدّمة — عباية عاجية للعيد" */
+  item: string;
+  amount: number;
+  invoiceId: number | null;
+  status: PaymentStatus;
+  createdAt: string;
+}

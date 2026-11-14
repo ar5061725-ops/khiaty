@@ -17,6 +17,9 @@ export const routes = {
   order: (id: string) => `/orders/${id}`,
   chat: (id: string) => `/orders/${id}/chat`,
   pay: (orderId: string, phase: PayPhase) => `/pay/${orderId}?phase=${phase}`,
+  payments: "/payments",
+  paySuccess: (orderId: string) => `/pay/success?order=${orderId}`,
+  payError: (status: string, orderId?: string) => `/pay/error?status=${status}${orderId ? `&order=${orderId}` : ""}`,
 };
 
 export const navFor = (role: Role) =>
@@ -24,10 +27,12 @@ export const navFor = (role: Role) =>
     ? [
         { href: routes.requests, label: "طلباتي" },
         { href: routes.orders, label: "الطلبات" },
+        { href: routes.payments, label: "المدفوعات" },
         { href: routes.newRequest, label: "طلب جديد" },
       ]
     : [
         { href: routes.browse, label: "تصفّح الطلبات" },
         { href: routes.myBids, label: "عروضي" },
         { href: routes.orders, label: "الطلبات" },
+        { href: routes.payments, label: "المدفوعات" },
       ];
